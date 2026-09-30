@@ -2,5 +2,7 @@
   "name": "Endless Runner",
   "description": "A minimalist, responsive HTML5 Canvas endless runner game with physics-based jumps, obstacle scaling, and instant restart.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }
