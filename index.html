@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Endless Runner</title>
+  <meta name="description" content="A minimalist, responsive HTML5 Canvas endless runner game with physics-based jumps, obstacle scaling, and instant restart.">
+  <meta property="og:title" content="Endless Runner">
+  <meta property="og:description" content="A minimalist, responsive HTML5 Canvas endless runner game with physics-based jumps, obstacle scaling, and instant restart.">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary_large_image">
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      background-color: #f3f4f6;
+      color: #1f2937;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, monospace;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: manipulation;
+    }
+    .game-wrapper {
+      width: 100%;
+      max-width: 800px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+    canvas {
+      width: 100%;
+      height: auto;
+      aspect-ratio: 800 / 300;
+      background-color: #fdfdfd;
+      border: 2px solid #e5e7eb;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+      display: block;
+      cursor: pointer;
+    }
+    .hud-hint {
+      font-size: 13px;
+      color: #6b7280;
+      text-align: center;
+      letter-spacing: 0.5px;
+    }
+    .hud-hint span {
+      display: inline-block;
+      background: #e5e7eb;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-weight: 600;
+      color: #374151;
+    }
+  </style>
+</head>
+<body>
+  <div class="game-wrapper">
+    <canvas id="gameCanvas" width="800" height="300"></canvas>
+    <div class="hud-hint">
+      Press <span>Space</span>, <span>↑</span>, or <span>Tap / Click</span> canvas to jump & restart
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const canvas = document.getElementById('gameCanvas');
+      const ctx = canvas.getContext('2d');
+
+      const CANVAS_WIDTH = 800;
+      const CANVAS_HEIGHT = 300;
+      const GROUND_Y = 240;
+
+      // Handle High-DPI screens for crisp canvas rendering
+      function setupCanvasDPI() {
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = CANVAS_WIDTH * dpr;
+        canvas.height = CANVAS_HEIGHT * dpr;
+        ctx.scale(dpr, dpr);
+      }
+      setupCanvasDPI();
+      window.addEventListener('resize', setupCanvasDPI);
+
+      // Game States
+      const STATE_START = 'START';
+      const STATE_PLAYING = 'PLAYING';
+      const STATE_GAMEOVER = 'GAMEOVER';
+
+      let gameState = STATE_START;
+      let score = 0;
+      let highScore = 0;
+      try {
+        const saved = localStorage.getItem('endless_runner_hi');
+        if (saved) highScore = parseInt(saved, 10) || 0;
+      } catch (e) {}
+
+      let currentSpeed = 6.0;
+      let frameCount = 0;
+      let groundOffset = 0;
+      let obstacles = [];
+      let nextObstacleTimer = 0;
+
+      // Minimalist decorative background elements (clouds)
+      const clouds = [
+        { x: 120, y: 50, w: 60, h: 14, speed: 0.35 },
+        { x: 380, y: 80, w: 75, h: 16, speed: 0.5 },
+        { x: 650, y: 40, w: 50, h: 12, speed: 0.3 }
+      ];
+
+      // Player object
+      const player = {
+        x: 65,
+        y: GROUND_Y - 44,
+        width: 32,
+        height: 44,
+        vy: 0,
+        gravity: 0.68,
+        jumpPower: -12.2,
+        isGrounded: true,
+
+        reset() {
+          this.y = GROUND_Y - this.height;
+          this.vy = 0;
+          this.isGrounded = true;
+        },
+
+        jump() {
+          if (this.isGrounded) {
+            this.vy = this.jumpPower;
+            this.isGrounded = false;
+          }
+        },
+
+        update() {
+          this.vy += this.gravity;
+          this.y += this.vy;
+
+          if (this.y >= GROUND_Y - this.height) {
+            this.y = GROUND_Y - this.height;
+            this.vy = 0;
+            this.isGrounded = true;
+          }
+        },
+
+        draw() {
+          // Minimalist retro player silhouette with eye cutout (rectangles only)
+          ctx.fillStyle = '#1e293b'; // Slate dark
+          ctx.fillRect(this.x, this.y, this.width, this.height);
+
+          // Eye detail (simple rectangle cutout for character)
+          ctx.fillStyle = '#fdfdfd';
+          ctx.fillRect(this.x + this.width - 10, this.y + 8, 6, 6);
+
+          // Subtle visor/pupil
+          ctx.fillStyle = '#38bdf8';
+          ctx.fillRect(this.x + this.width - 7, this.y + 9, 3, 3);
+
+          // Leg detail during run
+          if (this.isGrounded && gameState === STATE_PLAYING) {
+            const step = Math.floor(frameCount / 6) % 2;
+            ctx.fillStyle = '#0f172a';
+            if (step === 0) {
+              ctx.fillRect(this.x + 4, this.y + this.height - 4, 10, 4);
+            } else {
+              ctx.fillRect(this.x + this.width - 14, this.y + this.height - 4, 10, 4);
+            }
+          }
+        }
+      };
+
+      // Random helper
+      function randomRange(min, max) {
+        return Math.floor(Math.random() * (max - min + 1)) + min;
+      }
+
+      function spawnObstacle() {
+        // Obstacle variety (rectangles of various heights and widths)
+        const type = Math.random();
+        let w = 24;
+        let h = 38;
+        let color = '#dc2626'; // Vibrant obstacle red
+
+        if (type < 0.4) {
+          // Standard block
+          w = 20;
+          h = 36;
+        } else if (type < 0.75) {
+          // Tall block
+          w = 22;
+          h = 48;
+        } else {
+          // Double/Wide block
+          w = 38;
+          h = 32;
+        }
+
+        obstacles.push({
+          x: CANVAS_WIDTH + 20,
+          y: GROUND_Y - h,
+          width: w,
+          height: h,
+          color: color
+        });
+
+        // Calculate next spawn delay: randomized, decreasing as speed scales,
+        // while guaranteeing physically jumpable clearance
+        const minGap = Math.max(50, Math.floor(95 - currentSpeed * 3));
+        const maxGap = Math.max(85, Math.floor(155 - currentSpeed * 4));
+        nextObstacleTimer = randomRange(minGap, maxGap);
+      }
+
+      // Accurate Axis-Aligned Bounding Box (AABB) collision detection
+      function checkCollision(rect1, rect2) {
+        return (
+          rect1.x < rect2.x + rect2.width &&
+          rect1.x + rect1.width > rect2.x &&
+          rect1.y < rect2.y + rect2.height &&
+          rect1.y + rect1.height > rect2.y
+        );
+      }
+
+      function resetGame() {
+        score = 0;
+        currentSpeed = 6.0;
+        obstacles = [];
+        frameCount = 0;
+        groundOffset = 0;
+        player.reset();
+        nextObstacleTimer = 50;
+      }
+
+      function handleAction() {
+        if (gameState === STATE_START) {
+          resetGame();
+          gameState = STATE_PLAYING;
+          player.jump();
+        } else if (gameState === STATE_PLAYING) {
+          player.jump();
+        } else if (gameState === STATE_GAMEOVER) {
+          resetGame();
+          gameState = STATE_PLAYING;
+          player.jump();
+        }
+      }
+
+      // Input listeners (Spacebar, Up Arrow, Click, Touch)
+      window.addEventListener('keydown', function (e) {
+        if (e.code === 'Space' || e.code === 'ArrowUp' || e.key === ' ') {
+          e.preventDefault();
+          handleAction();
+        }
+      });
+
+      canvas.addEventListener('pointerdown', function (e) {
+        e.preventDefault();
+        handleAction();
+      });
+
+      function update() {
+        frameCount++;
+
+        // Update clouds
+        for (let i = 0; i < clouds.length; i++) {
+          clouds[i].x -= clouds[i].speed;
+          if (clouds[i].x + clouds[i].w < 0) {
+            clouds[i].x = CANVAS_WIDTH + randomRange(20, 100);
+            clouds[i].y = randomRange(30, 90);
+          }
+        }
+
+        if (gameState !== STATE_PLAYING) {
+          return;
+        }
+
+        // Score progression: +1 every frame survived
+        score += 1;
+        if (score > highScore) {
+          highScore = score;
+          try {
+            localStorage.setItem('endless_runner_hi', highScore.toString());
+          } catch (e) {}
+        }
+
+        // Horizontal speed scaling: slowly increases with score
+        currentSpeed = 6.0 + Math.min(score * 0.003, 8.0);
+
+        // Ground scroll
+        groundOffset = (groundOffset + currentSpeed) % 40;
+
+        // Player physics
+        player.update();
+
+        // Obstacles spawn timer
+        nextObstacleTimer--;
+        if (nextObstacleTimer <= 0) {
+          spawnObstacle();
+        }
+
+        // Update obstacles & check AABB collisions
+        for (let i = obstacles.length - 1; i >= 0; i--) {
+          const obs = obstacles[i];
+          obs.x -= currentSpeed;
+
+          // AABB Collision Check
+          if (checkCollision(player, obs)) {
+            gameState = STATE_GAMEOVER;
+            return;
+          }
+
+          // Remove obstacles off screen
+          if (obs.x + obs.width < -10) {
+            obstacles.splice(i, 1);
+          }
+        }
+      }
+
+      function draw() {
+        // Clear background
+        ctx.fillStyle = '#fdfdfd';
+        ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+        // Draw minimalist clouds (pure rectangles)
+        ctx.fillStyle = '#e2e8f0';
+        for (let i = 0; i < clouds.length; i++) {
+          const c = clouds[i];
+          ctx.fillRect(c.x, c.y, c.w, c.h);
+          ctx.fillRect(c.x + 10, c.y - 6, c.w - 20, 6);
+        }
+
+        // Draw ground baseline
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillRect(0, GROUND_Y, CANVAS_WIDTH, 2);
+
+        // Decorative moving ground dashes (pure rectangles)
+        ctx.fillStyle = '#cbd5e1';
+        for (let x = -groundOffset; x < CANVAS_WIDTH; x += 40) {
+          ctx.fillRect(x, GROUND_Y + 7, 18, 3);
+          ctx.fillRect(x + 24, GROUND_Y + 14, 8, 2);
+        }
+
+        // Draw obstacles (rectangles with accent tops)
+        for (let i = 0; i < obstacles.length; i++) {
+          const obs = obstacles[i];
+          ctx.fillStyle = obs.color;
+          ctx.fillRect(obs.x, obs.y, obs.width, obs.height);
+
+          // Top highlight cap
+          ctx.fillStyle = '#991b1b';
+          ctx.fillRect(obs.x, obs.y, obs.width, 4);
+        }
+
+        // Draw player
+        player.draw();
+
+        // Draw HUD Score (top corner)
+        ctx.font = 'bold 16px monospace';
+        ctx.textAlign = 'right';
+        ctx.fillStyle = '#64748b';
+        const formattedHI = String(highScore).padStart(5, '0');
+        const formattedScore = String(score).padStart(5, '0');
+        ctx.fillText(`HI: ${formattedHI}   SCORE: ${formattedScore}`, CANVAS_WIDTH - 24, 32);
+
+        // State-specific overlays
+        if (gameState === STATE_START) {
+          // Dim overlay backdrop
+          ctx.fillStyle = 'rgba(253, 253, 253, 0.75)';
+          ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+          ctx.textAlign = 'center';
+          ctx.fillStyle = '#0f172a';
+          ctx.font = 'bold 30px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+          ctx.fillText('ENDLESS RUNNER', CANVAS_WIDTH / 2, 115);
+
+          ctx.fillStyle = '#2563eb';
+          ctx.font = 'bold 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+          ctx.fillText('PRESS SPACEBAR OR CLICK TO START', CANVAS_WIDTH / 2, 155);
+
+          ctx.fillStyle = '#64748b';
+          ctx.font = '13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+          ctx.fillText('Jump over obstacles • Speed increases as score rises', CANVAS_WIDTH / 2, 185);
+        } else if (gameState === STATE_GAMEOVER) {
+          // Game Over frozen screen overlay
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.65)';
+          ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+          // Banner container
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(CANVAS_WIDTH / 2 - 180, 50, 360, 190);
+          ctx.strokeStyle = '#e2e8f0';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(CANVAS_WIDTH / 2 - 180, 50, 360, 190);
+
+          ctx.textAlign = 'center';
+          ctx.fillStyle = '#dc2626';
+          ctx.font = 'bold 26px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+          ctx.fillText('GAME OVER', CANVAS_WIDTH / 2, 95);
+
+          ctx.fillStyle = '#1e293b';
+          ctx.font = 'bold 16px monospace';
+          ctx.fillText(`SCORE: ${formattedScore}`, CANVAS_WIDTH / 2, 135);
+
+          ctx.fillStyle = '#64748b';
+          ctx.font = '14px monospace';
+          ctx.fillText(`BEST SCORE: ${formattedHI}`, CANVAS_WIDTH / 2, 162);
+
+          ctx.fillStyle = '#2563eb';
+          ctx.font = 'bold 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+          ctx.fillText('PRESS SPACE OR TAP TO RETRY', CANVAS_WIDTH / 2, 205);
+        }
+      }
+
+      // Main Game Loop using requestAnimationFrame
+      function gameLoop() {
+        update();
+        draw();
+        requestAnimationFrame(gameLoop);
+      }
+
+      // Initialize
+      player.reset();
+      requestAnimationFrame(gameLoop);
+    })();
+  </script>
+</body>
+</html>
